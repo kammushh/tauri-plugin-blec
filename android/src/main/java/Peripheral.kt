@@ -56,23 +56,25 @@ class Peripheral(private val activity: Activity, private val device: BluetoothDe
     private val callback = object:BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
-            if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothGatt.STATE_CONNECTED && gatt != null) {
-                // gatt.requestMtu(517)
-                this@Peripheral.connected = true
-                this@Peripheral.gatt = gatt
-                this@Peripheral.onConnectionStateChange?.invoke(true, "")
-                this@Peripheral.sendEvent(Event.DeviceConnected)
-
-            } else {
-                this@Peripheral.connected = false
-                this@Peripheral.gatt = null
-                this@Peripheral.onConnectionStateChange?.invoke(
-                    false,
-                    "Not connected. Status: $status, State: $newState"
-                )
-                this@Peripheral.sendEvent(Event.DeviceDisconnected)
-            }
-        }
+         if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothGatt.STATE_CONNECTED && gatt != null) {
+        // Success path - connection established
+        this@Peripheral.connected = true
+        this@Peripheral.gatt = gatt
+        this@Peripheral.onConnectionStateChange?.invoke(true, "")
+        this@Peripheral.sendEvent(Event.DeviceConnected)
+        } else {
+        // CRITICAL FIX: Close GATT to release Android BLE client resources
+        gatt?.close()
+        
+        this@Peripheral.connected = false
+        this@Peripheral.gatt = null
+        this@Peripheral.onConnectionStateChange?.invoke(
+            false,
+            "Not connected. Status: $status, State: $newState"
+        )
+        this@Peripheral.sendEvent(Event.DeviceDisconnected)
+    }
+}
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             println("onServicesDiscovered status $status, services ${gatt.services}")
@@ -232,10 +234,12 @@ class Peripheral(private val activity: Activity, private val device: BluetoothDe
 
     @SuppressLint("MissingPermission")
     fun disconnect(invoke: Invoke){
-        this.gatt?.disconnect()
-        this.connected = false
-        invoke.resolve()
-    }
+    this.gatt?.disconnect()
+    this.gatt?.close()  // ADD THIS - Critical for cleanup
+    this.gatt = null
+    this.connected = false
+    invoke.resolve()
+}
 
      class ResCharacteristic (
          private val uuid: String,
