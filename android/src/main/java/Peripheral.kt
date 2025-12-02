@@ -53,28 +53,48 @@ class Peripheral(private val activity: Activity, private val device: BluetoothDe
         channel.send(data)
     }
 
-    private val callback = object:BluetoothGattCallback() {
-        @SuppressLint("MissingPermission")
-        override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
-         if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothGatt.STATE_CONNECTED && gatt != null) {
-        // Success path - connection established
-        this@Peripheral.connected = true
-        this@Peripheral.gatt = gatt
-        this@Peripheral.onConnectionStateChange?.invoke(true, "")
-        this@Peripheral.sendEvent(Event.DeviceConnected)
-        } else {
-        // CRITICAL FIX: Close GATT to release Android BLE client resources
-        gatt?.close()
+   private val callback = object:BluetoothGattCallback() {
+    @SuppressLint("MissingPermission")
+    override fun onConnectionStateChange(gatt: BluetoothGatt?, status: Int, newState: Int) {
+        Log.d("Peripheral", "onConnectionStateChange: status=$status, newState=$newState")
         
-        this@Peripheral.connected = false
-        this@Peripheral.gatt = null
-        this@Peripheral.onConnectionStateChange?.invoke(
-            false,
-            "Not connected. Status: $status, State: $newState"
-        )
-        this@Peripheral.sendEvent(Event.DeviceDisconnected)
+        if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothGatt.STATE_CONNECTED && gatt != null) {
+            // SUCCESS PATH - Connection established
+            this@Peripheral.connected = true
+            this@Peripheral.gatt = gatt
+            this@Peripheral.onConnectionStateChange?.invoke(true, "")
+            this@Peripheral.sendEvent(Event.DeviceConnected)
+            
+        } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+            // DISCONNECTION PATH - Clean disconnection
+            Log.d("Peripheral", "Device disconnected normally")
+            gatt?.close()  // Critical: Release resources
+            
+            this@Peripheral.connected = false
+            this@Peripheral.gatt = null
+            this@Peripheral.onConnectionStateChange?.invoke(
+                false,
+                "Disconnected. Status: $status"
+            )
+            this@Peripheral.sendEvent(Event.DeviceDisconnected)
+            
+        } else {
+            // ERROR PATH - Connection failed (status != GATT_SUCCESS)
+            Log.e("Peripheral", "Connection error: status=$status, state=$newState")
+            
+            // CRITICAL FIX: Close GATT to release Android BLE resources
+            // Without this, subsequent connection attempts will timeout
+            gatt?.close()
+            
+            this@Peripheral.connected = false
+            this@Peripheral.gatt = null
+            this@Peripheral.onConnectionStateChange?.invoke(
+                false,
+                "Btleplug error: Runtime Error: timeout during connect"
+            )
+            this@Peripheral.sendEvent(Event.DeviceDisconnected)
+        }
     }
-}
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             println("onServicesDiscovered status $status, services ${gatt.services}")
@@ -234,10 +254,24 @@ class Peripheral(private val activity: Activity, private val device: BluetoothDe
 
     @SuppressLint("MissingPermission")
     fun disconnect(invoke: Invoke){
+    Log.d("Peripheral", "Explicit disconnect called")
+    
+    // Clear callbacks first
+    this.onConnectionStateChange = null
+    this.onServicesDiscovered = null
+    
+    // Disconnect and close
     this.gatt?.disconnect()
-    this.gatt?.close()  // ADD THIS - Critical for cleanup
-    this.gatt = null
-    this.connected = false
+    
+    // Add a small delay to allow disconnect to complete
+    Handler(Looper.getMainLooper()).postDelayed({
+        this@Peripheral.gatt?.close()
+        this@Peripheral.gatt = null
+        this@Peripheral.connected = false
+        this@Peripheral.services = listOf()
+        this@Peripheral.characteristics.clear()
+    }, 100)
+    
     invoke.resolve()
 }
 
